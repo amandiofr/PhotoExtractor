@@ -7,15 +7,30 @@ partial class MainForm
     {
         if (edges == null) return Array.Empty<LineSegmentPoint>();
         var sw = System.Diagnostics.Stopwatch.StartNew();
+
         locrStep1Runs = Step1_ScanHorizontalRuns(edges);
+        var hRuns     = Step1_ScanVerticalRuns(edges);
         SetStepTiming(0, sw);
-        locrStep2Segs = Step2_GroupRunsIntoSegments(locrStep1Runs);
+
+        var vSegs2 = Step2_GroupRunsIntoSegments(locrStep1Runs, horizontal: false);
+        var hSegs2 = Step2_GroupRunsIntoSegments(hRuns,         horizontal: true);
+        locrStep2Segs = vSegs2.Concat(hSegs2).ToList();
         SetStepTiming(1, sw);
-        locrStep3Segs = Step3_FilterVerticalSegments(locrStep2Segs);
+
+        var vSegs3 = Step3_FilterByOrientation(vSegs2, horizontal: false);
+        var hSegs3 = Step3_FilterByOrientation(hSegs2, horizontal: true);
+        locrStep3Segs = vSegs3.Concat(hSegs3).ToList();
         SetStepTiming(2, sw);
-        locrStep4Segs = Step4_MergeCollinearSegments(locrStep3Segs);
+
+        var vSegs4 = Step4_MergeCollinearSegments(vSegs3, horizontal: false);
+        var hSegs4 = Step4_MergeCollinearSegments(hSegs3, horizontal: true);
+        locrStep4Segs = vSegs4.Concat(hSegs4).ToList();
         SetStepTiming(3, sw);
-        return Array.Empty<LineSegmentPoint>();
+
+        return locrStep4Segs.Select(s => new LineSegmentPoint(
+            new OpenCvSharp.Point((int)MathF.Round(s.P1.X), (int)MathF.Round(s.P1.Y)),
+            new OpenCvSharp.Point((int)MathF.Round(s.P2.X), (int)MathF.Round(s.P2.Y))
+        )).ToArray();
     }
 
     void SetStepTiming(int step, System.Diagnostics.Stopwatch sw)
@@ -27,6 +42,8 @@ partial class MainForm
 
     // ── Step 1 ───────────────────────────────────────────────────────────────
 
+    // Scan horizontal → détecte les lignes verticales.
+    // WhiteRun : Y = ligne, MidX = centre X du run, Width = largeur.
     List<WhiteRun> Step1_ScanHorizontalRuns(Mat edges)
     {
         int rows = edges.Rows, cols = edges.Cols;
@@ -59,9 +76,19 @@ partial class MainForm
         return runs;
     }
 
+    // Scan vertical → détecte les lignes horizontales.
+    // Transpose l'image pour réutiliser le scan horizontal avec bon cache locality.
+    // WhiteRun résultant : Y = colonne (= X réel), MidX = centre Y du run, Width = hauteur.
+    List<WhiteRun> Step1_ScanVerticalRuns(Mat edges)
+    {
+        using var transposed = new Mat();
+        Cv2.Transpose(edges, transposed);
+        return Step1_ScanHorizontalRuns(transposed);
+    }
+
     // ── Step 2 ───────────────────────────────────────────────────────────────
 
-    List<Step2Segment> Step2_GroupRunsIntoSegments(List<WhiteRun> runs)
+    List<Step2Segment> Step2_GroupRunsIntoSegments(List<WhiteRun> runs, bool horizontal)
     {
         int n = runs.Count;
         if (n == 0) return new();
@@ -116,13 +143,15 @@ partial class MainForm
             g.Add(i);
         }
 
-        var result = new List<Step2Segment>(groups.Count * 2);
+        // Les runs sont ajoutés dans l'ordre i=0..n-1 = ordre Y croissant de Step1 → pas besoin de tri.
+        // Les groupes sont indépendants → traitement en parallèle.
+        var groupList = groups.Values.ToArray();
+        var resultParts = new List<Step2Segment>[groupList.Length];
 
-        foreach (var g in groups.Values)
+        System.Threading.Tasks.Parallel.For(0, groupList.Length, gi =>
         {
-            g.Sort((ia, ib) => runs[ia].Y != runs[ib].Y
-                ? runs[ia].Y.CompareTo(runs[ib].Y)
-                : midX[ia].CompareTo(midX[ib]));
+            var g = groupList[gi];
+            var localResult = new List<Step2Segment>();
 
             float groupAvgW = 0;
             for (int k = 0; k < g.Count; k++) groupAvgW += width[g[k]];
@@ -150,16 +179,18 @@ partial class MainForm
                 if (MathF.Abs(det) < 1f)
                 {
                     float mx = sx / cnt;
-                    p1 = new PointF(mx, minY + 0.5f); p2 = new PointF(mx, maxY + 0.5f);
+                    p1 = horizontal ? new PointF(minY + 0.5f, mx) : new PointF(mx, minY + 0.5f);
+                    p2 = horizontal ? new PointF(maxY + 0.5f, mx) : new PointF(mx, maxY + 0.5f);
                 }
                 else
                 {
                     float a = (cnt * sxy - sy * sx) / det;
                     float b = (sx - a * sy) / cnt;
-                    p1 = new PointF(a * (minY + 0.5f) + b, minY + 0.5f);
-                    p2 = new PointF(a * (maxY + 0.5f) + b, maxY + 0.5f);
+                    float rx1 = a * (minY + 0.5f) + b, rx2 = a * (maxY + 0.5f) + b;
+                    p1 = horizontal ? new PointF(minY + 0.5f, rx1) : new PointF(rx1, minY + 0.5f);
+                    p2 = horizontal ? new PointF(maxY + 0.5f, rx2) : new PointF(rx2, maxY + 0.5f);
                 }
-                result.Add(new Step2Segment(p1, p2, avgW));
+                localResult.Add(new Step2Segment(p1, p2, avgW));
             }
 
             void Split(int from, int to)
@@ -184,14 +215,17 @@ partial class MainForm
             }
 
             Split(0, g.Count - 1);
-        }
+            resultParts[gi] = localResult;
+        });
 
+        var result = new List<Step2Segment>(groupList.Length * 2);
+        foreach (var part in resultParts) result.AddRange(part);
         return result;
     }
 
     // ── Step 3 ───────────────────────────────────────────────────────────────
 
-    List<Step2Segment> Step3_FilterVerticalSegments(List<Step2Segment> segs)
+    List<Step2Segment> Step3_FilterByOrientation(List<Step2Segment> segs, bool horizontal)
     {
         var result = new List<Step2Segment>();
         foreach (var seg in segs)
@@ -199,7 +233,8 @@ partial class MainForm
             float dx = seg.P2.X - seg.P1.X, dy = seg.P2.Y - seg.P1.Y;
             float len = MathF.Sqrt(dx * dx + dy * dy);
             if (len < 2f * seg.AvgWidth) continue;
-            if (MathF.Abs(dy) < 2f * MathF.Abs(dx)) continue;
+            if (!horizontal && MathF.Abs(dy) < 2f * MathF.Abs(dx)) continue;
+            if ( horizontal && MathF.Abs(dx) < 2f * MathF.Abs(dy)) continue;
             result.Add(seg);
         }
         if (result.Count < 2) return result;
@@ -212,7 +247,7 @@ partial class MainForm
 
     // ── Step 4 ───────────────────────────────────────────────────────────────
 
-    List<Step2Segment> Step4_MergeCollinearSegments(List<Step2Segment> segs)
+    List<Step2Segment> Step4_MergeCollinearSegments(List<Step2Segment> segs, bool horizontal)
     {
         int n = segs.Count;
         if (n < 2) return new List<Step2Segment>(segs);
@@ -230,11 +265,16 @@ partial class MainForm
 
         const float cosMaxAngle = 0.9945f; // cos(6°)
 
+        // Tri sur l'axe principal (Y pour vertical, X pour horizontal)
         float[] topY = new float[n], botY = new float[n];
         for (int i = 0; i < n; i++)
         {
-            topY[i] = MathF.Min(segs[i].P1.Y, segs[i].P2.Y);
-            botY[i] = MathF.Max(segs[i].P1.Y, segs[i].P2.Y);
+            topY[i] = horizontal
+                ? MathF.Min(segs[i].P1.X, segs[i].P2.X)
+                : MathF.Min(segs[i].P1.Y, segs[i].P2.Y);
+            botY[i] = horizontal
+                ? MathF.Max(segs[i].P1.X, segs[i].P2.X)
+                : MathF.Max(segs[i].P1.Y, segs[i].P2.Y);
         }
         int[] order = Enumerable.Range(0, n).OrderBy(i => topY[i]).ToArray();
 
@@ -245,21 +285,17 @@ partial class MainForm
         for (int ii = 0; ii < n; ii++)
         {
             int i = order[ii];
-            // Max gap pour i : j peut être au plus 2× plus large → gap max = (wi + 2wi)/2 * 20 = 30wi
             float maxReachI = segs[i].AvgWidth * 30f;
             for (int jj = ii + 1; jj < n; jj++)
             {
                 int j = order[jj];
                 if (topY[j] > botY[i] + maxReachI) break;
 
-                // 1. Similarité de largeur (facteur 2)
                 if (MathF.Min(segs[i].AvgWidth, segs[j].AvgWidth) * 2f <
                     MathF.Max(segs[i].AvgWidth, segs[j].AvgWidth)) continue;
 
-                // 2. Similarité d'orientation
                 if (MathF.Abs(dir[i].x * dir[j].x + dir[i].y * dir[j].y) < cosMaxAngle) continue;
 
-                // 3. Colinéarité : perp des extrémités les plus proches
                 float maxPerp = (segs[i].AvgWidth + segs[j].AvgWidth) / 2f * 4f;
                 float ecx = cen[j].x - cen[i].x, ecy = cen[j].y - cen[i].y;
                 float maxReach = maxPerp + (len[i] + len[j]) / 2f;
@@ -277,7 +313,6 @@ partial class MainForm
                 float perpJtoI = MathF.Abs(-dir[j].y * (epI.X - cen[j].x) + dir[j].x * (epI.Y - cen[j].y));
                 if (perpItoJ > maxPerp || perpJtoI > maxPerp) continue;
 
-                // 4. Gap le long de la direction
                 float tj1 = (segs[j].P1.X - segs[i].P1.X) * dir[i].x + (segs[j].P1.Y - segs[i].P1.Y) * dir[i].y;
                 float tj2 = (segs[j].P2.X - segs[i].P1.X) * dir[i].x + (segs[j].P2.Y - segs[i].P1.Y) * dir[i].y;
                 float jLo = MathF.Min(tj1, tj2), jHi = MathF.Max(tj1, tj2);
