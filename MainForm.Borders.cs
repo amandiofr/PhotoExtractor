@@ -134,15 +134,6 @@ partial class MainForm
             return;
         }
 
-        // LOCR debug : repeindre à chaque mouvement pour suivre la souris
-        if (rbLOCR.Checked && locrStepChecks.Count > 3
-            && locrStepChecks[2].Checked && locrStepChecks[3].Checked)
-        {
-            hoveredLine = null;
-            pictureBox.Invalidate();
-            return;
-        }
-
         // Hover Hough – lignes
         hoveredParallelRefIdx = -1;
         if (houghLines == null || houghLines.Length == 0)

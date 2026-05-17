@@ -33,6 +33,7 @@ partial class MainForm : Form
     List<Point2f> doneCenters = new();
     List<CheckBox> locrStepChecks = new();
     List<Label> locrStepLabels = new();
+    List<Label> locrStepTimings = new();
     List<WhiteRun> locrStep1Runs = new();
     List<Step2Segment> locrStep2Segs = new();
     List<Step2Segment> locrStep3Segs = new();
@@ -115,8 +116,8 @@ partial class MainForm : Form
         };
 
         // Sous-panneau switches + sliders, centré horizontalement
-        int slW = 130, slH = 50, lblH = 18, slGap = 8, chkW = 72, chkH = 22, rbW = 76, stepCbSize = 20, stepGap = 4;
-        int stepsAreaW = 4 * stepCbSize + 3 * stepGap; // = 92
+        int slW = 130, slH = 50, lblH = 18, slGap = 8, chkW = 72, chkH = 22, rbW = 76, stepCbSize = 18, stepLblW = 16, stepRowGap = 3, stepTimingW = 48;
+        int stepsAreaW = stepLblW + 4 + stepCbSize + 4 + stepTimingW; // = 90
         int cpW = chkW + 8 + rbW + 12 + 5 * slW + 4 * slGap + 8 + stepsAreaW;
         var cp = new Panel { Top = 2, Width = cpW, Height = 92, BackColor = Color.FromArgb(30, 30, 30) };
         panel.Controls.Add(cp);
@@ -172,27 +173,33 @@ partial class MainForm : Form
         sliderMinLen.ValueChanged += (s, e) => { UpdateLabel(labelMinLen, "MinLen", sliderMinLen.Value); UpdateEdges(); };
         sliderGap.ValueChanged    += (s, e) => { UpdateLabel(labelGap,    "Gap",    sliderGap.Value);    UpdateEdges(); };
 
-        // Cases LOCR étapes, layout horizontal avec numéro au-dessus
-        int stepNumH = 14;
-        int stepCbTop = (cp.Height - stepNumH - 2 - stepCbSize) / 2;
-        int stepNumTop = stepCbTop - stepNumH - 2;
+        // Cases LOCR étapes, layout vertical avec numéro à gauche
         Color[] stepColors = { Color.FromArgb(255, 140, 0), Color.FromArgb(0, 210, 255), Color.FromArgb(60, 120, 255), Color.FromArgb(220, 50, 50) };
         int stepsStartX = cpW - stepsAreaW;
+        int totalStepsH = 4 * stepCbSize + 3 * stepRowGap;
+        int stepsTopY = (cp.Height - totalStepsH) / 2;
         for (int s = 0; s < 4; s++)
         {
-            int sx2 = stepsStartX + s * (stepCbSize + stepGap);
+            int rowY = stepsTopY + s * (stepCbSize + stepRowGap);
             var lbl = new Label { Text = $"{s + 1}", ForeColor = stepColors[s],
-                Font = new Font("Segoe UI", 7f),
-                Left = sx2, Top = stepNumTop, Width = stepCbSize, Height = stepNumH,
-                AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Visible = false };
-            var cb = new CheckBox { Left = sx2, Top = stepCbTop,
+                Font = new Font("Segoe UI", 8f),
+                Left = stepsStartX, Top = rowY, Width = stepLblW, Height = stepCbSize,
+                AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Visible = false };
+            var cb = new CheckBox { Left = stepsStartX + stepLblW + 4, Top = rowY,
                 Width = stepCbSize, Height = stepCbSize, AutoSize = false, Visible = false,
                 CheckAlign = ContentAlignment.MiddleCenter };
             cb.CheckedChanged += (_, _) => pictureBox.Invalidate();
+            var timing = new Label { Text = "", ForeColor = Color.FromArgb(140, 140, 140),
+                Font = new Font("Segoe UI", 7.5f),
+                Left = stepsStartX + stepLblW + 4 + stepCbSize + 4, Top = rowY,
+                Width = stepTimingW, Height = stepCbSize,
+                AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Visible = false };
             cp.Controls.Add(lbl);
             cp.Controls.Add(cb);
+            cp.Controls.Add(timing);
             locrStepLabels.Add(lbl);
             locrStepChecks.Add(cb);
+            locrStepTimings.Add(timing);
         }
 
         // ── Boutons ─────────────────────────────────────────────────────────
@@ -295,8 +302,9 @@ partial class MainForm : Form
         labelMinLen.Visible  = !isLocr;
         sliderGap.Visible    = !isLocr;
         labelGap.Visible     = !isLocr;
-        foreach (var cb  in locrStepChecks) cb.Visible  = isLocr;
-        foreach (var lbl in locrStepLabels) lbl.Visible = isLocr;
+        foreach (var cb  in locrStepChecks)  cb.Visible     = isLocr;
+        foreach (var lbl in locrStepLabels)  lbl.Visible    = isLocr;
+        foreach (var t   in locrStepTimings) t.Visible      = isLocr;
         UpdateEdges();
     }
 

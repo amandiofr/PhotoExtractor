@@ -6,11 +6,23 @@ partial class MainForm
     LineSegmentPoint[] DetectLinesLOCR()
     {
         if (edges == null) return Array.Empty<LineSegmentPoint>();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         locrStep1Runs = ScanHorizontalRuns(edges);
+        SetStepTiming(0, sw);
         locrStep2Segs = ComputeStep2(locrStep1Runs);
+        SetStepTiming(1, sw);
         locrStep3Segs = ComputeStep3(locrStep2Segs);
+        SetStepTiming(2, sw);
         locrStep4Segs = ComputeStep4(locrStep3Segs);
+        SetStepTiming(3, sw);
         return Array.Empty<LineSegmentPoint>();
+    }
+
+    void SetStepTiming(int step, System.Diagnostics.Stopwatch sw)
+    {
+        if (locrStepTimings.Count > step)
+            locrStepTimings[step].Text = $"{sw.ElapsedMilliseconds} ms";
+        sw.Restart();
     }
 
     List<Step2Segment> ComputeStep4(List<Step2Segment> segs)
@@ -32,15 +44,28 @@ partial class MainForm
 
         const float cosMaxAngle = 0.9945f; // cos(6°)
 
+        // Tri par Y du haut pour court-circuit spatial sur le gap
+        float[] topY = new float[n], botY = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            topY[i] = MathF.Min(segs[i].P1.Y, segs[i].P2.Y);
+            botY[i] = MathF.Max(segs[i].P1.Y, segs[i].P2.Y);
+        }
+        float maxGapAll = segs.Max(s => s.AvgWidth) * 20f;
+        int[] order = Enumerable.Range(0, n).OrderBy(i => topY[i]).ToArray();
+
         // Union-Find
         int[] parent = Enumerable.Range(0, n).ToArray();
         int Find(int i) { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
         void Union(int a, int b) { parent[Find(a)] = Find(b); }
 
-        for (int i = 0; i < n; i++)
+        for (int ii = 0; ii < n; ii++)
         {
-            for (int j = i + 1; j < n; j++)
+            int i = order[ii];
+            for (int jj = ii + 1; jj < n; jj++)
             {
+                int j = order[jj];
+                if (topY[j] > botY[i] + maxGapAll) break; // tous les j suivants sont encore plus loin
                 // 1. Similarité de largeur (facteur 2)
                 if (MathF.Min(segs[i].AvgWidth, segs[j].AvgWidth) * 2f <
                     MathF.Max(segs[i].AvgWidth, segs[j].AvgWidth)) continue;
@@ -49,6 +74,13 @@ partial class MainForm
                 if (MathF.Abs(dir[i].x * dir[j].x + dir[i].y * dir[j].y) < cosMaxAngle) continue;
 
                 // 3. Colinéarité : perp des extrémités les plus proches vers la ligne de l'autre segment
+                // Court-circuit : si la distance centre-à-centre dépasse maxPerp + demi-longueurs, impossible
+                float maxPerp = (segs[i].AvgWidth + segs[j].AvgWidth) / 2f * 4f;
+                float ecx = cen[j].x - cen[i].x, ecy = cen[j].y - cen[i].y;
+                float cenDist2 = ecx * ecx + ecy * ecy;
+                float maxReach = maxPerp + (len[i] + len[j]) / 2f;
+                if (cenDist2 > maxReach * maxReach) continue;
+
                 var epI = segs[i].P1; var epJ = segs[j].P1;
                 float minD2ep = float.MaxValue;
                 foreach (var a in new[] { segs[i].P1, segs[i].P2 })
@@ -59,7 +91,6 @@ partial class MainForm
                     }
                 float perpItoJ = MathF.Abs(-dir[i].y * (epJ.X - cen[i].x) + dir[i].x * (epJ.Y - cen[i].y));
                 float perpJtoI = MathF.Abs(-dir[j].y * (epI.X - cen[j].x) + dir[j].x * (epI.Y - cen[j].y));
-                float maxPerp = (segs[i].AvgWidth + segs[j].AvgWidth) / 2f * 4f;
                 if (perpItoJ > maxPerp || perpJtoI > maxPerp) continue;
 
                 // 4. Gap le long de la direction
@@ -156,57 +187,82 @@ partial class MainForm
         int Find(int i) { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
         void Union(int a, int b) { parent[Find(a)] = Find(b); }
 
+        // Tableaux plats pour accès sans double indirection
+        var midX  = new float[n];
+        var width = new float[n];
+        for (int i = 0; i < n; i++) { midX[i] = runs[i].MidX; width[i] = runs[i].Width; }
+
         // Groupe les runs de lignes adjacentes dont les étendues X se chevauchent
-        var byRow = new Dictionary<int, List<int>>();
+        var byRow = new Dictionary<int, List<int>>(n / 4);
         for (int i = 0; i < n; i++)
         {
             int y = runs[i].Y;
-            if (!byRow.TryGetValue(y, out var list)) byRow[y] = list = new();
+            if (!byRow.TryGetValue(y, out var list)) byRow[y] = list = new List<int>(8);
             list.Add(i);
         }
+
         foreach (var (y, row) in byRow)
         {
             if (!byRow.TryGetValue(y + 1, out var nextRow)) continue;
+            int nr = nextRow.Count;
+            int lo = 0;
             foreach (int a in row)
-                foreach (int b in nextRow)
-                    if (Math.Abs(runs[a].MidX - runs[b].MidX) <= (runs[a].Width + runs[b].Width) / 2f
-                        && Math.Min(runs[a].Width, runs[b].Width) * 2 >= Math.Max(runs[a].Width, runs[b].Width))
+            {
+                float ax = midX[a], aw = width[a];
+                float aLeft = ax - aw / 2f, aRight = ax + aw / 2f;
+                // Avance lo : b dont le bord droit est < bord gauche de a ne peut plus jamais correspondre
+                while (lo < nr && midX[nextRow[lo]] + width[nextRow[lo]] / 2f < aLeft) lo++;
+                for (int bi = lo; bi < nr; bi++)
+                {
+                    int b = nextRow[bi];
+                    float bx = midX[b], bw = width[b];
+                    if (bx - bw / 2f > aRight) break;
+                    if (Math.Abs(ax - bx) <= (aw + bw) / 2f
+                        && Math.Min(aw, bw) * 2 >= Math.Max(aw, bw))
                         Union(a, b);
+                }
+            }
         }
 
-        // Regroupe par racine
-        var groups = new Dictionary<int, List<int>>();
+        // Regroupe par racine — ignore immédiatement les runs isolés (groupe de taille 1)
+        var groupSize = new Dictionary<int, int>(n / 4);
         for (int i = 0; i < n; i++)
         {
             int root = Find(i);
-            if (!groups.TryGetValue(root, out var g)) groups[root] = g = new();
+            groupSize.TryGetValue(root, out int sz);
+            groupSize[root] = sz + 1;
+        }
+        var groups = new Dictionary<int, List<int>>(groupSize.Count);
+        for (int i = 0; i < n; i++)
+        {
+            int root = Find(i);
+            if (groupSize[root] < 2) continue;
+            if (!groups.TryGetValue(root, out var g)) groups[root] = g = new List<int>(groupSize[root]);
             g.Add(i);
         }
 
-        var result = new List<Step2Segment>();
+        var result = new List<Step2Segment>(groups.Count);
         foreach (var g in groups.Values)
         {
-            if (g.Count < 2) continue; // ignorer les runs isolés
-
-            // Régression linéaire : MidX = a*Y + b
-            float ng = g.Count;
+            // Régression linéaire : MidX = a*Y + b  (boucle manuelle, sans LINQ)
+            int ng = g.Count;
             float sy = 0, sx = 0, syy = 0, sxy = 0;
             float minY = float.MaxValue, maxY = float.MinValue;
             float sumW = 0;
-            foreach (int i in g)
+            for (int k = 0; k < ng; k++)
             {
-                var r = runs[i];
-                float fy = r.Y;
-                sy += fy; sx += r.MidX; syy += fy * fy; sxy += r.MidX * fy;
+                int i = g[k];
+                float fy = runs[i].Y, mx = midX[i], w = width[i];
+                sy += fy; sx += mx; syy += fy * fy; sxy += mx * fy;
                 if (fy < minY) minY = fy;
                 if (fy > maxY) maxY = fy;
-                sumW += r.Width;
+                sumW += w;
             }
             float avgW = sumW / ng;
             float det = ng * syy - sy * sy;
 
             PointF p1, p2;
-            if (Math.Abs(det) < 1f)
+            if (MathF.Abs(det) < 1f)
             {
                 float mx = sx / ng;
                 p1 = new PointF(mx, minY + 0.5f);
@@ -352,127 +408,41 @@ partial class MainForm
             }
         }
 
-        // Debug : 2 segments step3 les plus proches de la souris + critères step4
-        if (locrStepChecks.Count > 3 && locrStepChecks[2].Checked && locrStepChecks[3].Checked
-            && locrStep3Segs.Count >= 2)
-        {
-            var mp = pictureBox.PointToClient(Cursor.Position);
-
-            float DistPtToSeg(Step2Segment s)
-            {
-                float ax = ox + s.P1.X * scX, ay = oy + s.P1.Y * scY;
-                float bx = ox + s.P2.X * scX, by = oy + s.P2.Y * scY;
-                float ddx = bx - ax, ddy = by - ay, lsq = ddx * ddx + ddy * ddy;
-                if (lsq < 1f) return MathF.Sqrt((mp.X - ax) * (mp.X - ax) + (mp.Y - ay) * (mp.Y - ay));
-                float t = Math.Clamp(((mp.X - ax) * ddx + (mp.Y - ay) * ddy) / lsq, 0f, 1f);
-                return MathF.Sqrt((mp.X - ax - t * ddx) * (mp.X - ax - t * ddx) + (mp.Y - ay - t * ddy) * (mp.Y - ay - t * ddy));
-            }
-
-            var nearest = locrStep3Segs
-                .Select((s, idx) => (s, idx, d: DistPtToSeg(s)))
-                .OrderBy(t => t.d).Take(2)
-                .OrderBy(t => t.idx).ToList();
-            var sA = nearest[0].s; var sB = nearest[1].s;
-
-            // Surlignage blanc
-            using var hpen = new System.Drawing.Pen(Color.White, 2f);
-            void DrawHL(Step2Segment s)
-            {
-                float ddx = s.P2.X - s.P1.X, ddy = s.P2.Y - s.P1.Y;
-                float l = MathF.Sqrt(ddx * ddx + ddy * ddy);
-                float nx = l > 0 ? -ddy / l * s.AvgWidth / 2f : s.AvgWidth / 2f;
-                float ny = l > 0 ?  ddx / l * s.AvgWidth / 2f : 0f;
-                PointF Sc(float ix, float iy) => new(ox + ix * scX, oy + iy * scY);
-                g.DrawPolygon(hpen, new[] {
-                    Sc(s.P1.X + nx, s.P1.Y + ny), Sc(s.P1.X - nx, s.P1.Y - ny),
-                    Sc(s.P2.X - nx, s.P2.Y - ny), Sc(s.P2.X + nx, s.P2.Y + ny)
-                });
-            }
-            DrawHL(sA); DrawHL(sB);
-
-            // Calcul des critères
-            float dxA = sA.P2.X - sA.P1.X, dyA = sA.P2.Y - sA.P1.Y, lA = MathF.Sqrt(dxA * dxA + dyA * dyA);
-            float dxB = sB.P2.X - sB.P1.X, dyB = sB.P2.Y - sB.P1.Y;
-            float lB = MathF.Sqrt(dxB * dxB + dyB * dyB);
-            var dirA = lA > 0 ? (dxA / lA, dyA / lA) : (0f, 1f);
-            var dirB = lB > 0 ? (dxB / lB, dyB / lB) : (0f, 1f);
-
-            float wMin = MathF.Min(sA.AvgWidth, sB.AvgWidth);
-            float wMax = MathF.Max(sA.AvgWidth, sB.AvgWidth);
-            bool c1 = wMin * 2f >= wMax;
-
-            float dotAB = MathF.Abs(dirA.Item1 * dirB.Item1 + dirA.Item2 * dirB.Item2);
-            bool c2 = dotAB >= 0.9945f;
-
-            var depA = sA.P1; var depB = sB.P1;
-            float minD2db = float.MaxValue;
-            foreach (var a in new[] { sA.P1, sA.P2 })
-                foreach (var b in new[] { sB.P1, sB.P2 })
-                {
-                    float d2db = (a.X-b.X)*(a.X-b.X) + (a.Y-b.Y)*(a.Y-b.Y);
-                    if (d2db < minD2db) { minD2db = d2db; depA = a; depB = b; }
-                }
-            float cenAx = (sA.P1.X + sA.P2.X) / 2f, cenAy = (sA.P1.Y + sA.P2.Y) / 2f;
-            float cenBx = (sB.P1.X + sB.P2.X) / 2f, cenBy = (sB.P1.Y + sB.P2.Y) / 2f;
-            float avgWDB = (sA.AvgWidth + sB.AvgWidth) / 2f;
-            float perpAtoB = MathF.Abs(-dirA.Item2 * (depB.X - cenAx) + dirA.Item1 * (depB.Y - cenAy));
-            float perpBtoA = MathF.Abs(-dirB.Item2 * (depA.X - cenBx) + dirB.Item1 * (depA.Y - cenBy));
-            float maxPerp = avgWDB * 4f;
-            bool c3 = perpAtoB <= maxPerp && perpBtoA <= maxPerp;
-
-            float tj1 = (sB.P1.X - sA.P1.X) * dirA.Item1 + (sB.P1.Y - sA.P1.Y) * dirA.Item2;
-            float tj2 = (sB.P2.X - sA.P1.X) * dirA.Item1 + (sB.P2.Y - sA.P1.Y) * dirA.Item2;
-            float jLo = MathF.Min(tj1, tj2), jHi = MathF.Max(tj1, tj2);
-            float gap = MathF.Max(0f, MathF.Max(-jHi, jLo - lA));
-            float maxGap = avgWDB * 20f;
-            bool c4 = gap <= maxGap;
-
-            var lines = new[] {
-                $"1. Largeur   {wMin:F1}/{wMax:F1} (max 2×)      {(c1 ? "✓" : "✗")}",
-                $"2. Direction cos={dotAB:F4} (≥0.9945)      {(c2 ? "✓" : "✗")}",
-                $"3. Perp A→B  {perpAtoB/avgWDB:F2}/{maxPerp/avgWDB:F1}× larg  {(perpAtoB <= maxPerp ? "✓" : "✗")}",
-                $"   Perp B→A  {perpBtoA/avgWDB:F2}/{maxPerp/avgWDB:F1}× larg  {(perpBtoA <= maxPerp ? "✓" : "✗")}",
-                $"4. Gap       {gap/avgWDB:F1}/{maxGap/avgWDB:F1}× larg          {(c4 ? "✓" : "✗")}",
-            };
-
-            using var font = new Font("Consolas", 9f);
-            float lh = font.Height + 2;
-            float pw = lines.Max(l => g.MeasureString(l, font).Width) + 10;
-            float ph = lines.Length * lh + 8;
-            float ppx = MathF.Min(mp.X + 14, pictureBox.Width  - pw - 4);
-            float ppy = MathF.Min(mp.Y + 14, pictureBox.Height - ph - 4);
-            using var bgBrush = new SolidBrush(Color.FromArgb(210, 20, 20, 20));
-            g.FillRectangle(bgBrush, ppx, ppy, pw, ph);
-            bool[] lineOk = { c1, c2, perpAtoB <= maxPerp, perpBtoA <= maxPerp, c4 };
-            for (int ki = 0; ki < lines.Length; ki++)
-            {
-                using var br = new SolidBrush(lineOk[ki] ? Color.LightGreen : Color.OrangeRed);
-                g.DrawString(lines[ki], font, br, ppx + 5, ppy + 4 + ki * lh);
-            }
-        }
     }
 
     // Scan horizontal : pour chaque ligne de l'image edges (binaire),
     // retourne tous les runs blancs avec leur ligne, centre X et largeur.
     List<WhiteRun> ScanHorizontalRuns(Mat edges)
     {
-        var runs = new List<WhiteRun>();
         int rows = edges.Rows, cols = edges.Cols;
-        for (int y = 0; y < rows; y++)
+        int step = (int)edges.Step();
+        var data = new byte[rows * step];
+        System.Runtime.InteropServices.Marshal.Copy(edges.Data, data, 0, data.Length);
+
+        // Scan parallèle : chaque ligne est indépendante
+        var perRow = new List<WhiteRun>[rows];
+        System.Threading.Tasks.Parallel.For(0, rows, y =>
         {
-            int x = 0;
+            var row = new List<WhiteRun>();
+            int rowBase = y * step, x = 0;
             while (x < cols)
             {
-                if (edges.At<byte>(y, x) == 255)
+                if (data[rowBase + x] == 255)
                 {
                     int start = x;
-                    while (x < cols && edges.At<byte>(y, x) == 255) x++;
+                    while (x < cols && data[rowBase + x] == 255) x++;
                     int width = x - start;
-                    runs.Add(new WhiteRun(y, start + width / 2f, width));
+                    row.Add(new WhiteRun(y, start + width / 2f, width));
                 }
                 else x++;
             }
-        }
+            perRow[y] = row;
+        });
+
+        // Fusion dans l'ordre (préserve le tri Y croissant)
+        var runs = new List<WhiteRun>(rows * 8);
+        for (int y = 0; y < rows; y++)
+            if (perRow[y] != null) runs.AddRange(perRow[y]);
         return runs;
     }
 }

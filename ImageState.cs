@@ -18,4 +18,5 @@ class ImageState
     public List<Step2Segment> LocrStep2Segs = new();
     public List<Step2Segment> LocrStep3Segs = new();
     public List<Step2Segment> LocrStep4Segs = new();
+    public string[] LocrStepTimings = new string[4];
 }

@@ -33,6 +33,7 @@ partial class MainForm
         t.LocrStep2Segs = new List<Step2Segment>(locrStep2Segs);
         t.LocrStep3Segs = new List<Step2Segment>(locrStep3Segs);
         t.LocrStep4Segs = new List<Step2Segment>(locrStep4Segs);
+        for (int i = 0; i < Math.Min(locrStepTimings.Count, 4); i++) t.LocrStepTimings[i] = locrStepTimings[i].Text;
     }
 
     void LoadStateFromTab(ImageState t)
@@ -47,6 +48,7 @@ partial class MainForm
         locrStep2Segs = new List<Step2Segment>(t.LocrStep2Segs);
         locrStep3Segs = new List<Step2Segment>(t.LocrStep3Segs);
         locrStep4Segs = new List<Step2Segment>(t.LocrStep4Segs);
+        for (int i = 0; i < Math.Min(locrStepTimings.Count, 4); i++) locrStepTimings[i].Text = t.LocrStepTimings[i] ?? "";
         hoveredLine = null; hoveredBorderIdx = -1; hoveredParallelRefIdx = -1;
         draggingBorderIdx = -1; dragMoved = false;
         viewZoom = 1f; viewPan = PointF.Empty;
