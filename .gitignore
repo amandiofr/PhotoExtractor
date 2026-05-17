@@ -1,0 +1,8 @@
+bin/
+obj/
+.claude/
+*.user
+*.suo
+*.lscache
+config.json
+.vs/
