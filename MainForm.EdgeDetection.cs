@@ -27,6 +27,7 @@ partial class MainForm
         {
             psychoBitmap ??= GeneratePsycho(160, 120);
             displayBitmap = null;
+            rawBitmap?.Dispose(); rawBitmap = null;
             pictureBox.Invalidate();
             return;
         }
@@ -64,6 +65,8 @@ partial class MainForm
                 Cv2.Line(display, seg.P1, seg.P2, new Scalar(220, 0, 220), 2);
         }
 
+        rawBitmap?.Dispose();
+        rawBitmap = OpenCvSharp.Extensions.BitmapConverter.ToBitmap(image);
         displayBitmap?.Dispose();
         displayBitmap = OpenCvSharp.Extensions.BitmapConverter.ToBitmap(display);
         display.Dispose();

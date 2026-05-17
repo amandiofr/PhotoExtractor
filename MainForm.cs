@@ -73,8 +73,16 @@ partial class MainForm : Form
     int draggingBorderIdx = -1;
     bool dragMoved;
 
+    // Drag de coin (mode refine)
+    int draggingCornerIdx = -1;
+    int dragCornerBorderA, dragCornerBorderB;
+    Point2f dragCornerFixedA, dragCornerFixedB;
+    Point2f dragCornerStartMouse, dragCornerStartPos;
+    Point2f loupeCenterImg;
+
     // Zoom / pan
     Bitmap? displayBitmap;
+    Bitmap? rawBitmap;
     float viewZoom = 1.0f;
     PointF viewPan = PointF.Empty;
     bool panDragging;

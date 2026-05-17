@@ -58,6 +58,21 @@ partial class MainForm
         }
         var p = new Point2f(imgPt.Value.X, imgPt.Value.Y);
 
+        // Drag de coin en cours
+        if (draggingCornerIdx >= 0)
+        {
+            var scaledP = new Point2f(
+                dragCornerStartPos.X + (p.X - dragCornerStartMouse.X) / 3f,
+                dragCornerStartPos.Y + (p.Y - dragCornerStartMouse.Y) / 3f);
+            loupeCenterImg = scaledP;
+            selectedBorders[dragCornerBorderA] = LineThroughPoints(scaledP, dragCornerFixedA);
+            selectedBorders[dragCornerBorderB] = LineThroughPoints(scaledP, dragCornerFixedB);
+            dragMoved = true;
+            CleanDoneInsideCurrentQuad();
+            pictureBox.Invalidate();
+            return;
+        }
+
         // Drag en cours : déplacer le bord en gardant son angle
         if (draggingBorderIdx >= 0)
         {
@@ -75,6 +90,19 @@ partial class MainForm
                 pictureBox.Invalidate();
             }
             return;
+        }
+
+        // En mode refine, annuler le hover de bord si le curseur est sur un handle de coin
+        if (refineMode && selectedBorders.All(b => b != null))
+        {
+            const float hr = 10f;
+            var cs = ComputeCorners();
+            bool nearHandle = cs.Any(c => { var d = ImageToDisplay(c); if (d == null) return false; float ddx = e.X - d.Value.X, ddy = e.Y - d.Value.Y; return ddx * ddx + ddy * ddy <= hr * hr; });
+            if (nearHandle)
+            {
+                if (hoveredBorderIdx >= 0) { hoveredBorderIdx = -1; pictureBox.Cursor = Cursors.Default; pictureBox.Invalidate(); }
+                return;
+            }
         }
 
         // Hover sur un bord sélectionné (tous modes)
@@ -158,13 +186,42 @@ partial class MainForm
 
     void OnImageMouseDown(object? sender, MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Middle)
+        if (e.Button == MouseButtons.Middle || e.Button == MouseButtons.Right)
         {
             panDragging = true; panDragStart = e.Location; panAtDragStart = viewPan;
             pictureBox.Cursor = Cursors.Hand;
             return;
         }
         if (e.Button != MouseButtons.Left) return;
+
+        // En mode refine, priorité aux handles de coin
+        if (refineMode && selectedBorders.All(b => b != null))
+        {
+            var corners = ComputeCorners();
+            const float hr = 10f;
+            for (int i = 0; i < 4; i++)
+            {
+                var dc = ImageToDisplay(corners[i]);
+                if (dc == null) continue;
+                float dx = e.X - dc.Value.X, dy = e.Y - dc.Value.Y;
+                if (dx * dx + dy * dy <= hr * hr)
+                {
+                    draggingCornerIdx = i;
+                    var (bA, fA, bB, fB) = CornerDragInfo(i, corners);
+                    dragCornerBorderA = bA; dragCornerFixedA = fA;
+                    dragCornerBorderB = bB; dragCornerFixedB = fB;
+                    dragCornerStartPos = corners[i];
+                    var spt = DisplayToImage(e.Location);
+                    dragCornerStartMouse = spt != null ? new Point2f(spt.Value.X, spt.Value.Y) : corners[i];
+                    loupeCenterImg = corners[i];
+                    dragMoved = false;
+                    pictureBox.Cursor = Cursors.SizeAll;
+                    pictureBox.Invalidate();
+                    return;
+                }
+            }
+        }
+
         if (hoveredBorderIdx < 0) return;
         draggingBorderIdx = hoveredBorderIdx;
         dragMoved = false;
@@ -173,10 +230,16 @@ partial class MainForm
 
     void OnImageMouseUp(object? sender, MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Middle)
+        if (e.Button == MouseButtons.Middle || e.Button == MouseButtons.Right)
         {
             panDragging = false;
             pictureBox.Cursor = hoveredBorderIdx >= 0 ? Cursors.SizeAll : Cursors.Default;
+            return;
+        }
+        if (draggingCornerIdx >= 0)
+        {
+            draggingCornerIdx = -1;
+            pictureBox.Cursor = Cursors.Default;
             return;
         }
         if (draggingBorderIdx < 0) return;
@@ -309,6 +372,38 @@ partial class MainForm
         selectedBorders[nearestIdx] = hoveredLine.Value;
         CleanDoneInsideCurrentQuad();
         UpdateDisplay();
+    }
+
+    // Retourne (borderA, coinFixeA, borderB, coinFixeB) pour le drag du coin k
+    (int, Point2f, int, Point2f) CornerDragInfo(int k, Point2f[] corners)
+    {
+        var lines = selectedBorders.Select(b => b!.Value).ToArray();
+        bool[] isH = lines.Select(l => Math.Abs(l.P2.X - l.P1.X) >= Math.Abs(l.P2.Y - l.P1.Y)).ToArray();
+        var hIdx = Enumerable.Range(0, 4).Where(i =>  isH[i]).ToArray();
+        var vIdx = Enumerable.Range(0, 4).Where(i => !isH[i]).ToArray();
+        if (hIdx.Length == 2 && vIdx.Length == 2)
+            return k switch
+            {
+                0 => (hIdx[0], corners[1], vIdx[0], corners[3]),
+                1 => (hIdx[0], corners[0], vIdx[1], corners[2]),
+                2 => (hIdx[1], corners[3], vIdx[1], corners[1]),
+                3 => (hIdx[1], corners[2], vIdx[0], corners[0]),
+                _ => throw new InvalidOperationException()
+            };
+        // Cas séquentiel : corner[k] = lines[k] ∩ lines[(k+1)%4]
+        return (k, corners[(k + 3) % 4], (k + 1) % 4, corners[(k + 1) % 4]);
+    }
+
+    // Crée un LineSegmentPoint passant par p et q, étendu aux dimensions de l'image
+    LineSegmentPoint LineThroughPoints(Point2f p, Point2f q)
+    {
+        float dx = q.X - p.X, dy = q.Y - p.Y;
+        float len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len < 0.001f) return selectedBorders[0]!.Value;
+        float ext = (image!.Width + image.Height) / 2f;
+        return new LineSegmentPoint(
+            new OpenCvSharp.Point((int)(p.X - dx / len * ext), (int)(p.Y - dy / len * ext)),
+            new OpenCvSharp.Point((int)(p.X + dx / len * ext), (int)(p.Y + dy / len * ext)));
     }
 
     void ClearBorders()

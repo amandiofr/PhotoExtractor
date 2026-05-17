@@ -115,6 +115,21 @@ partial class MainForm
         if (!allSet) return;
         var corners = ComputeCorners();
 
+        // Handles de coin en mode refine
+        if (refineMode)
+        {
+            const float hr = 10f;
+            using var hFill = new SolidBrush(Color.FromArgb(220, 255, 255, 255));
+            using var hBorder = new System.Drawing.Pen(Color.FromArgb(180, 30, 30, 30), 1.5f);
+            foreach (var corner in corners)
+            {
+                var dh = ImageToDisplay(corner);
+                if (dh == null) continue;
+                g.FillEllipse(hFill,   dh.Value.X - hr, dh.Value.Y - hr, hr * 2, hr * 2);
+                g.DrawEllipse(hBorder, dh.Value.X - hr, dh.Value.Y - hr, hr * 2, hr * 2);
+            }
+        }
+
         var center = new Point2f(corners.Average(c => c.X), corners.Average(c => c.Y));
         var dc = ImageToDisplay(center);
         if (dc == null) return;
@@ -144,6 +159,8 @@ partial class MainForm
 
         hitRotLeft  = new RectangleF(items[0].X - r, dc.Value.Y - r, r * 2, r * 2);
         hitRotRight = new RectangleF(items[2].X - r, dc.Value.Y - r, r * 2, r * 2);
+
+        DrawCornerLoupe(g, corners, borderSegs);
 
         // Label "UP" près du bord dans la direction de la flèche
         if (!orientationTouched) return;
@@ -179,6 +196,66 @@ partial class MainForm
         g.FillRectangle(bgBrush, upLabelRect);
         g.DrawString("UP", upFont, fgBrush, upLabelRect, sf);
         g.Restore(upState);
+    }
+
+    void DrawCornerLoupe(Graphics g, Point2f[] corners, (Point2f, Point2f)[]? borderSegs)
+    {
+        if (draggingCornerIdx < 0) return;
+        var bmp = rawBitmap ?? displayBitmap;
+        if (bmp == null) return;
+        var dragged = corners[draggingCornerIdx];
+
+        const int loupeSize = 180;
+        const int margin    = 10;
+        int lx = margin, ly = pictureBox.Height - margin - loupeSize;
+        var dstRect = new Rectangle(lx, ly, loupeSize, loupeSize);
+
+        // srcSize adapté au zoom courant (×2 = moitié du zoom = plus de contexte)
+        int srcSize = Math.Clamp((int)(loupeSize * 2 / Math.Max(1f, viewZoom)), 60, Math.Min(bmp.Width, bmp.Height) - 1);
+        float zoom  = (float)loupeSize / srcSize;
+
+        // Centre sur la position souris (pas sur le coin calculé) pour suivi direct
+        float srcX0 = loupeCenterImg.X - srcSize / 2f;
+        float srcY0 = loupeCenterImg.Y - srcSize / 2f;
+        int srcX = Math.Clamp((int)MathF.Round(srcX0), 0, bmp.Width  - srcSize);
+        int srcY = Math.Clamp((int)MathF.Round(srcY0), 0, bmp.Height - srcSize);
+        var srcRect = new Rectangle(srcX, srcY, srcSize, srcSize);
+
+        // Décalage pour que le coin reste toujours au centre de la loupe
+        float dstLeft = lx + (srcX - srcX0) * zoom;
+        float dstTop  = ly + (srcY - srcY0) * zoom;
+
+        g.SetClip(dstRect);
+
+        // Image originale (sans edges)
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.DrawImage(bmp, new RectangleF(dstLeft, dstTop, loupeSize, loupeSize), srcRect, GraphicsUnit.Pixel);
+        g.InterpolationMode = InterpolationMode.Bilinear;
+
+        // Bords superposés
+        if (borderSegs != null)
+        {
+            PointF ToL(Point2f p) => new(dstLeft + (p.X - srcX) * zoom, dstTop + (p.Y - srcY) * zoom);
+            for (int i = 0; i < 4; i++)
+            {
+                var (bp1, bp2) = borderSegs[i];
+                using var bp = new System.Drawing.Pen(BorderWinColors[i], 1.5f);
+                g.DrawLine(bp, ToL(bp1), ToL(bp2));
+            }
+        }
+
+        g.ResetClip();
+
+        // Réticule fixe au centre de la loupe
+        float rx = lx + loupeSize / 2f;
+        float ry = ly + loupeSize / 2f;
+        using var crossPen = new System.Drawing.Pen(Color.White, 1.5f);
+        g.DrawLine(crossPen, rx - 10, ry, rx + 10, ry);
+        g.DrawLine(crossPen, rx, ry - 10, rx, ry + 10);
+
+        // Cadre
+        using var framePen = new System.Drawing.Pen(Color.FromArgb(200, 200, 200, 200), 2f);
+        g.DrawRectangle(framePen, dstRect);
     }
 
     static Bitmap GeneratePsycho(int w, int h)
