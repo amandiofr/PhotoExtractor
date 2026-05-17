@@ -241,42 +241,79 @@ partial class MainForm
             g.Add(i);
         }
 
-        var result = new List<Step2Segment>(groups.Count);
+        var result = new List<Step2Segment>(groups.Count * 2);
+
         foreach (var g in groups.Values)
         {
-            // Régression linéaire : MidX = a*Y + b  (boucle manuelle, sans LINQ)
-            int ng = g.Count;
-            float sy = 0, sx = 0, syy = 0, sxy = 0;
-            float minY = float.MaxValue, maxY = float.MinValue;
-            float sumW = 0;
-            for (int k = 0; k < ng; k++)
-            {
-                int i = g[k];
-                float fy = runs[i].Y, mx = midX[i], w = width[i];
-                sy += fy; sx += mx; syy += fy * fy; sxy += mx * fy;
-                if (fy < minY) minY = fy;
-                if (fy > maxY) maxY = fy;
-                sumW += w;
-            }
-            float avgW = sumW / ng;
-            float det = ng * syy - sy * sy;
+            // Tri par Y (puis X à Y égal)
+            g.Sort((ia, ib) => runs[ia].Y != runs[ib].Y
+                ? runs[ia].Y.CompareTo(runs[ib].Y)
+                : midX[ia].CompareTo(midX[ib]));
 
-            PointF p1, p2;
-            if (MathF.Abs(det) < 1f)
+            float groupAvgW = 0;
+            for (int k = 0; k < g.Count; k++) groupAvgW += width[g[k]];
+            groupAvgW /= g.Count;
+            float eps = groupAvgW; // tolérance RDP : 1× largeur moyenne du groupe
+
+            // Régression linéaire sur g[from..to] → un Step2Segment
+            void Emit(int from, int to)
             {
-                float mx = sx / ng;
-                p1 = new PointF(mx, minY + 0.5f);
-                p2 = new PointF(mx, maxY + 0.5f);
+                if (to <= from) return;
+                int cnt = to - from + 1;
+                float sy = 0, sx = 0, syy = 0, sxy = 0;
+                float minY = float.MaxValue, maxY = float.MinValue, sumW = 0;
+                for (int k = from; k <= to; k++)
+                {
+                    int idx = g[k];
+                    float fy = runs[idx].Y, mx = midX[idx], w = width[idx];
+                    sy += fy; sx += mx; syy += fy * fy; sxy += mx * fy;
+                    if (fy < minY) minY = fy;
+                    if (fy > maxY) maxY = fy;
+                    sumW += w;
+                }
+                float avgW = sumW / cnt;
+                float det = cnt * syy - sy * sy;
+                PointF p1, p2;
+                if (MathF.Abs(det) < 1f)
+                {
+                    float mx = sx / cnt;
+                    p1 = new PointF(mx, minY + 0.5f); p2 = new PointF(mx, maxY + 0.5f);
+                }
+                else
+                {
+                    float a = (cnt * sxy - sy * sx) / det;
+                    float b = (sx - a * sy) / cnt;
+                    p1 = new PointF(a * (minY + 0.5f) + b, minY + 0.5f);
+                    p2 = new PointF(a * (maxY + 0.5f) + b, maxY + 0.5f);
+                }
+                result.Add(new Step2Segment(p1, p2, avgW));
             }
-            else
+
+            // Ramer-Douglas-Peucker : découpe si déviation perpendiculaire max > eps
+            void Split(int from, int to)
             {
-                float a = (ng * sxy - sy * sx) / det;
-                float b = (sx - a * sy) / ng;
-                p1 = new PointF(a * (minY + 0.5f) + b, minY + 0.5f);
-                p2 = new PointF(a * (maxY + 0.5f) + b, maxY + 0.5f);
+                if (to - from < 2) { Emit(from, to); return; }
+                float x0 = midX[g[from]], y0 = runs[g[from]].Y;
+                float x1 = midX[g[to]],  y1 = runs[g[to]].Y;
+                float dx = x1 - x0, dy = y1 - y0;
+                float lineLen = MathF.Sqrt(dx * dx + dy * dy);
+                float maxDist = 0; int maxK = from + 1;
+                if (lineLen > 0.001f)
+                {
+                    for (int k = from + 1; k < to; k++)
+                    {
+                        float ex = midX[g[k]] - x0, ey = runs[g[k]].Y - y0;
+                        float d = MathF.Abs(ex * dy - ey * dx) / lineLen;
+                        if (d > maxDist) { maxDist = d; maxK = k; }
+                    }
+                }
+                if (maxDist > eps) { Split(from, maxK); Split(maxK, to); }
+                else Emit(from, to);
             }
-            result.Add(new Step2Segment(p1, p2, avgW));
+
+            Split(0, g.Count - 1);
         }
+
         return result;
     }
 
@@ -359,7 +396,6 @@ partial class MainForm
         if (locrStepChecks.Count > 2 && locrStepChecks[2].Checked && locrStep3Segs.Count > 0)
         {
             using var pen = new System.Drawing.Pen(Color.FromArgb(220, 60, 120, 255), 1f);
-            using var circlePen = new System.Drawing.Pen(Color.FromArgb(80, 60, 120, 255), 1f);
             foreach (var seg in locrStep3Segs)
             {
                 float dx = seg.P2.X - seg.P1.X, dy = seg.P2.Y - seg.P1.Y;
@@ -375,14 +411,6 @@ partial class MainForm
                 };
                 g.DrawPolygon(pen, pts);
                 g.DrawLine(pen, S(seg.P1.X, seg.P1.Y), S(seg.P2.X, seg.P2.Y));
-
-                // Cercles de proximité step 4 : rayon = AvgWidth * 5 (même que maxGap)
-                float rx = seg.AvgWidth * 20f * scX, ry = seg.AvgWidth * 20f * scY;
-                foreach (var ep in new[] { seg.P1, seg.P2 })
-                {
-                    float cx = ox + ep.X * scX, cy = oy + ep.Y * scY;
-                    g.DrawEllipse(circlePen, cx - rx, cy - ry, rx * 2, ry * 2);
-                }
             }
         }
 
