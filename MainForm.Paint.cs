@@ -10,14 +10,17 @@ partial class MainForm
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        // Écran psychédélique quand aucune image n'est chargée
+        // Fond cinéma quand aucune image n'est chargée
         if (image == null)
         {
-            if (psychoBitmap != null)
+            int pw = Math.Max(1, pictureBox.Width), ph = Math.Max(1, pictureBox.Height);
+            if (cinemaBg == null || (!settingsAnimating && (cinemaBg.Width != pw || cinemaBg.Height != ph)))
             {
-                g.InterpolationMode = InterpolationMode.Bilinear;
-                g.DrawImage(psychoBitmap, 0, 0, pictureBox.Width, pictureBox.Height);
+                cinemaBg?.Dispose();
+                cinemaBg = GenerateCinemaBg(pw, ph);
             }
+            g.DrawImage(cinemaBg, 0, 0, pw, ph);
+            DrawCinemaTitle(g, pw, ph);
             return;
         }
 
@@ -258,44 +261,118 @@ partial class MainForm
         g.DrawRectangle(framePen, dstRect);
     }
 
-    static Bitmap GeneratePsycho(int w, int h)
+    static FontFamily VintageFontFamily()
+    {
+        foreach (var name in new[] { "Harrington", "Copperplate Gothic Bold", "Garamond", "Palatino Linotype", "Georgia" })
+            try { return new FontFamily(name); } catch { }
+        return FontFamily.GenericSerif;
+    }
+
+    void DrawCinemaTitle(Graphics g, int pw, int ph)
+    {
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+        var ff = VintageFontFamily();
+
+        const string title = "PHOTOEXTRACTOR";
+        float size = Math.Max(14f, ph / 9f);
+        using var font = new Font(ff, size, FontStyle.Bold, GraphicsUnit.Pixel);
+
+        // Mesure précise (GenericTypographic évite les marges GDI parasites)
+        var sz  = g.MeasureString(title, font, PointF.Empty, StringFormat.GenericTypographic);
+        float tx = (pw - sz.Width)  / 2f;
+        float ty = ph / 2f + ph * 0.06f;   // légèrement sous le centre (icône au-dessus)
+
+        // ── Icône de la form (zoomée, dégradée) ───────────────────────────────
+        if (Icon != null)
+        {
+            int iconSize = (int)(Math.Min(pw, ph) * 0.20f);
+            using var iconBmp = Icon.ToBitmap();
+            var attr = new System.Drawing.Imaging.ImageAttributes();
+            attr.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.28f });
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.DrawImage(iconBmp,
+                new Rectangle((pw - iconSize) / 2, (int)(ty - iconSize - size * 0.9f), iconSize, iconSize),
+                0, 0, iconBmp.Width, iconBmp.Height, GraphicsUnit.Pixel, attr);
+            g.InterpolationMode = InterpolationMode.Bilinear;
+        }
+
+        // ── Lignes décoratives encadrant le titre ─────────────────────────────
+        float gap   = size * 0.35f;
+        float lineW = sz.Width * 1.08f;
+        float lx    = (pw - lineW) / 2f;
+        using var lp1 = new System.Drawing.Pen(Color.FromArgb(55, 220, 205, 170), 1f);
+        using var lp2 = new System.Drawing.Pen(Color.FromArgb(26, 220, 205, 170), 1f);
+        // au-dessus
+        g.DrawLine(lp1, lx, ty - gap,        lx + lineW, ty - gap);
+        g.DrawLine(lp2, lx, ty - gap - 4f,   lx + lineW, ty - gap - 4f);
+        // en dessous
+        g.DrawLine(lp1, lx, ty + sz.Height + gap,      lx + lineW, ty + sz.Height + gap);
+        g.DrawLine(lp2, lx, ty + sz.Height + gap + 4f, lx + lineW, ty + sz.Height + gap + 4f);
+
+        // ── Texte principal ───────────────────────────────────────────────────
+        using var textBrush = new SolidBrush(Color.FromArgb(62, 230, 215, 185));
+        g.DrawString(title, font, textBrush, tx, ty, StringFormat.GenericTypographic);
+    }
+
+    static Bitmap GenerateCinemaBg(int w, int h)
     {
         var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         var data = bmp.LockBits(new Rectangle(0, 0, w, h),
                                 System.Drawing.Imaging.ImageLockMode.WriteOnly,
                                 bmp.PixelFormat);
         var row = new int[w];
+        var rng = new Random(7);
         double cx = w / 2.0, cy = h / 2.0;
+        double maxDist = Math.Sqrt(cx * cx + cy * cy);
+
+        // Poussières épars
+        var dust = new HashSet<(int, int)>();
+        int dustCount = Math.Max(1, w * h / 3500);
+        while (dust.Count < dustCount) dust.Add((rng.Next(w), rng.Next(h)));
+
+        // Griffure verticale douce
+        int scratchX = (int)(cx + rng.Next(-w / 5, w / 5));
+
         for (int y = 0; y < h; y++)
         {
             for (int x = 0; x < w; x++)
             {
-                double v = Math.Sin(x / 8.0)
-                         + Math.Sin(y / 6.0)
-                         + Math.Sin((x + y) / 11.0)
-                         + Math.Sin(Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 7.0);
-                float hue = (float)(((v + 4.0) / 8.0) * 360.0) % 360f;
-                if (hue < 0) hue += 360f;
-                row[x] = PsychoHsl(hue, 1f, 0.5f);
+                double dx = x - cx, dy = y - cy;
+                double distSq = (dx * dx + dy * dy) / (maxDist * maxDist);
+
+                // Faisceau projecteur + vignette
+                double beam = Math.Exp(-distSq * 2.2);
+                double vig  = 1.0 - distSq * 0.88;
+
+                // Variation basse fréquence lisse (pas de blocs)
+                double wave = Math.Sin(x / (w * 0.18)) * Math.Cos(y / (h * 0.14)) * 5.0
+                            + Math.Sin(x / (w * 0.07) + 1.1) * 3.0;
+
+                // Grain fin uniquement (per-pixel, faible amplitude)
+                int fine = rng.Next(0, 11);
+
+                double base_ = (5 + fine + wave) * vig + beam * 28;
+
+                double warmth = beam * 0.38;
+                int r = Math.Clamp((int)(base_ * (1.0 + warmth * 0.18)), 0, 255);
+                int g = Math.Clamp((int)(base_ * (1.0 + warmth * 0.06)), 0, 255);
+                int b = Math.Clamp((int)(base_ * (1.0 - warmth * 0.12)), 0, 255);
+
+                // Griffure gaussienne très subtile
+                double sd = x - scratchX;
+                double scratch = Math.Exp(-sd * sd / 6.0) * 6;
+                r = Math.Clamp(r + (int)scratch, 0, 255);
+                g = Math.Clamp(g + (int)(scratch * 0.9), 0, 255);
+
+                // Poussière
+                if (dust.Contains((x, y)))
+                { r = Math.Clamp(r + 55, 0, 255); g = Math.Clamp(g + 50, 0, 255); b = Math.Clamp(b + 38, 0, 255); }
+
+                row[x] = (255 << 24) | (r << 16) | (g << 8) | b;
             }
             System.Runtime.InteropServices.Marshal.Copy(row, 0, IntPtr.Add(data.Scan0, y * data.Stride), w);
         }
         bmp.UnlockBits(data);
         return bmp;
-    }
-
-    static int PsychoHsl(float h, float s, float l)
-    {
-        float c = (1f - Math.Abs(2f * l - 1f)) * s;
-        float x = c * (1f - Math.Abs(h / 60f % 2f - 1f));
-        float m = l - c / 2f;
-        float r, g, b;
-        if      (h < 60f)  { r = c; g = x; b = 0; }
-        else if (h < 120f) { r = x; g = c; b = 0; }
-        else if (h < 180f) { r = 0; g = c; b = x; }
-        else if (h < 240f) { r = 0; g = x; b = c; }
-        else if (h < 300f) { r = x; g = 0; b = c; }
-        else               { r = c; g = 0; b = x; }
-        return (255 << 24) | ((int)((r + m) * 255) << 16) | ((int)((g + m) * 255) << 8) | (int)((b + m) * 255);
     }
 }

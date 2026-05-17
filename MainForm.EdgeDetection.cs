@@ -25,7 +25,6 @@ partial class MainForm
     {
         if (image == null)
         {
-            psychoBitmap ??= GeneratePsycho(160, 120);
             displayBitmap = null;
             rawBitmap?.Dispose(); rawBitmap = null;
             pictureBox.Invalidate();

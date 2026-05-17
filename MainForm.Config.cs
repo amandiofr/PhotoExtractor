@@ -58,6 +58,8 @@ partial class MainForm
         btnRefine.Enabled = false;
         btnParallel.Enabled = false;
         SetActiveMode(0);
+        btnClear.Enabled = true;
+        foreach (var b in btnBorders) b.Enabled = true;
         labelStatus.Text = $"Image loaded: {Path.GetFileName(path)} ({image.Width}×{image.Height})";
         if (tabs.Count == 0) { tabs.Add(new ImageState()); activeTabIdx = 0; }
         else if (activeTabIdx < 0) activeTabIdx = 0;
@@ -95,6 +97,8 @@ partial class MainForm
                 foreach (var p in validPaths) AddImageAsTab(p);
                 int target = Math.Clamp(cfg.ActiveTab, 0, tabs.Count - 1);
                 if (target != activeTabIdx) SwitchToTab(target);
+                tabScrollOffset = cfg.TabScrollOffset;
+                RefreshTabPanel();
             }
             else if (validPaths.Length == 1) LoadImage(validPaths[0]);
 
@@ -105,6 +109,7 @@ partial class MainForm
                 ClampPan();
                 pictureBox.Invalidate();
             }
+            showSettings = cfg.ShowSettings;
         }
         catch { Width = 1100; Height = 750; }
     }
@@ -125,7 +130,8 @@ partial class MainForm
                                 sliderMinLen.Value, sliderGap.Value,
                                 tabPaths, activeTab, rbLOCR.Checked,
                                 locrStepChecks.Select(cb => cb.Checked).ToArray(),
-                                viewZoom, viewPan.X, viewPan.Y);
+                                viewZoom, viewPan.X, viewPan.Y,
+                                showSettings, tabScrollOffset);
         File.WriteAllText(configPath,
             JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
     }

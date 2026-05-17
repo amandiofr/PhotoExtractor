@@ -7,5 +7,7 @@ record AppConfig(
     string[] TabPaths = null!, int ActiveTab = 0,
     bool UseLOCR = false,
     bool[] LocrStepChecked = null!,
-    float ViewZoom = 1f, float ViewPanX = 0f, float ViewPanY = 0f
+    float ViewZoom = 1f, float ViewPanX = 0f, float ViewPanY = 0f,
+    bool ShowSettings = false,
+    int TabScrollOffset = 0
 );

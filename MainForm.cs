@@ -23,10 +23,19 @@ partial class MainForm : Form
     Button btnExtractManual;
     Button btnOpen;
     Button btnClear;
+    Button btnSettings = null!;
+    Panel settingsPanel = null!;
+    Panel settingsSlide = null!;
+    Panel buttonBar = null!;
+    bool showSettings = false;
+    bool settingsAnimating;
+    volatile int settingsAnimGen;
+    float settingsAnimT;
 
     // Onglets
     List<ImageState> tabs = new();
     int activeTabIdx = -1;
+    int tabScrollOffset = 0;
     Panel tabPanel = null!;
     bool refineMode;
     bool parallelMode;
@@ -47,9 +56,16 @@ partial class MainForm : Form
     static readonly Color[] BorderWinColors =
         { Color.OrangeRed, Color.LimeGreen, Color.DodgerBlue, Color.Yellow };
 
-    // ── DWM (dark title bar + rounded corners) ──────────────────────────────
+    // ── DWM ─────────────────────────────────────────────────────────────────
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    static extern int DwmFlush();
+
+    protected override CreateParams CreateParams
+    {
+        get { var cp = base.CreateParams; cp.ExStyle |= 0x02000000; return cp; } // WS_EX_COMPOSITED
+    }
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -90,7 +106,7 @@ partial class MainForm : Form
     PointF panAtDragStart;
 
     string? loadedImagePath;
-    Bitmap? psychoBitmap;
+    Bitmap? cinemaBg;
 
     public MainForm()
     {
@@ -115,27 +131,28 @@ partial class MainForm : Form
         pictureBox.Paint += OnPictureBoxPaint;
         Controls.Add(pictureBox);
 
-        // ── Panneau de contrôles ────────────────────────────────────────────
-        var panel = new Panel
-        {
-            Dock = DockStyle.Bottom,
-            Height = 140,
-            BackColor = Color.FromArgb(30, 30, 30)
-        };
-
-        // Sous-panneau switches + sliders, centré horizontalement
+        // ── Panneau réglages (glissant) ─────────────────────────────────────
         int slW = 130, slH = 50, lblH = 18, slGap = 8, chkW = 72, chkH = 22, rbW = 76, stepCbSize = 18, stepLblW = 16, stepRowGap = 3, stepTimingW = 48;
-        int stepsAreaW = stepLblW + 4 + stepCbSize + 4 + stepTimingW; // = 90
+        int stepsAreaW = stepLblW + 4 + stepCbSize + 4 + stepTimingW;
         int cpW = chkW + 8 + rbW + 12 + 5 * slW + 4 * slGap + 8 + stepsAreaW;
+        int slideH = 94; // 2px margin + 92px content
+
+        var slide = new Panel { Dock = DockStyle.Bottom, Height = 0, BackColor = Color.FromArgb(30, 30, 30) };
         var cp = new Panel { Top = 2, Width = cpW, Height = 92, BackColor = Color.FromArgb(30, 30, 30) };
-        panel.Controls.Add(cp);
-        panel.Resize += (s, e) => cp.Left = Math.Max(0, (panel.Width - cpW) / 2);
+        slide.Controls.Add(cp);
+        slide.Resize += (s, e) => cp.Left = Math.Max(0, (slide.Width - cpW) / 2);
+        settingsPanel = cp;
+        settingsSlide = slide;
+
+        // ── Barre de boutons (hauteur fixe) ────────────────────────────────
+        var panel = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Color.FromArgb(30, 30, 30) };
+        buttonBar = panel;
 
         // Colonne 1 : Edges / Lines (centrées verticalement)
         int chkTop = (90 - (2 * chkH + 4)) / 2;
-        checkEdges = new CheckBox { Text = "Edges", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
+        checkEdges = new SmoothCheckBox { Text = "Edges", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
             Left = 0, Top = chkTop, Width = chkW, Height = chkH, AutoSize = false };
-        checkLines = new CheckBox { Text = "Lines", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
+        checkLines = new SmoothCheckBox { Text = "Lines", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
             Left = 0, Top = chkTop + chkH + 4, Width = chkW, Height = chkH, AutoSize = false };
         checkEdges.CheckedChanged += (s, e) => UpdateDisplay();
         checkLines.CheckedChanged += (s, e) => UpdateDisplay();
@@ -145,10 +162,10 @@ partial class MainForm : Form
         // Colonne 2 : Hough / LOCR (centrées verticalement)
         int rbH = 18, rbX = chkW + 8;
         int rbTop = (90 - (2 * rbH + 4)) / 2;
-        rbHough = new RadioButton { Text = "Hough", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
-            Left = rbX, Top = rbTop, Width = rbW, Height = rbH, Checked = true, AutoSize = false };
-        rbLOCR  = new RadioButton { Text = "LOCR",  ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
-            Left = rbX, Top = rbTop + rbH + 4, Width = rbW, Height = rbH, AutoSize = false };
+        rbHough = new SmoothRadioButton { Text = "Hough", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
+            Left = rbX, Top = rbTop, Width = rbW, Height = rbH, AutoSize = false };
+        rbLOCR  = new SmoothRadioButton { Text = "LOCR",  ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
+            Left = rbX, Top = rbTop + rbH + 4, Width = rbW, Height = rbH, Checked = true, AutoSize = false };
         rbHough.CheckedChanged += (s, e) => { if (rbHough.Checked) UpdateDetectorMode(); };
         rbLOCR.CheckedChanged  += (s, e) => { if (rbLOCR.Checked)  UpdateDetectorMode(); };
         cp.Controls.Add(rbHough);
@@ -158,7 +175,7 @@ partial class MainForm : Form
         int sx = chkW + 8 + rbW + 12, lt = 8, st = lt + lblH + 2;
         (TrackBar, Label) Sl(string name, int min, int max, int val)
         {
-            var l = new Label { Text = $"{name}: {val}", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
+            var l = new SmoothLabel { Text = $"{name}: {val}", ForeColor = Color.White, Font = new Font("Segoe UI", 9f),
                 Left = sx, Top = lt, Width = slW, Height = lblH,
                 AutoSize = false, TextAlign = ContentAlignment.MiddleCenter };
             var t = new TrackBar { Minimum = min, Maximum = max, Value = val,
@@ -169,11 +186,11 @@ partial class MainForm : Form
             return (t, l);
         }
 
-        (sliderBlur,   labelBlur)   = Sl("Blur",   1,   21,  3);
-        (sliderLow,    labelLow)    = Sl("Low",    0,  255, 30);
-        (sliderHigh,   labelHigh)   = Sl("High",   0,  255, 100);
-        (sliderMinLen, labelMinLen) = Sl("MinLen", 5,  300, 20);
-        (sliderGap,    labelGap)    = Sl("Gap",    1,   80, 15);
+        (sliderBlur,   labelBlur)   = Sl("Blur",   1,   21,   3);
+        (sliderLow,    labelLow)    = Sl("Low",    0,  255,  79);
+        (sliderHigh,   labelHigh)   = Sl("High",   0,  255,  72);
+        (sliderMinLen, labelMinLen) = Sl("MinLen", 5,  300, 161);
+        (sliderGap,    labelGap)    = Sl("Gap",    1,   80,  33);
 
         sliderBlur.ValueChanged   += (s, e) => { int v = sliderBlur.Value; if (v % 2 == 0) { sliderBlur.Value = v + 1; return; } UpdateLabel(labelBlur, "Blur", v); UpdateEdges(); };
         sliderLow.ValueChanged    += (s, e) => { UpdateLabel(labelLow,    "Low",    sliderLow.Value);    UpdateEdges(); };
@@ -189,15 +206,15 @@ partial class MainForm : Form
         for (int s = 0; s < 4; s++)
         {
             int rowY = stepsTopY + s * (stepCbSize + stepRowGap);
-            var lbl = new Label { Text = $"{s + 1}", ForeColor = stepColors[s],
+            var lbl = new SmoothLabel { Text = $"{s + 1}", ForeColor = stepColors[s],
                 Font = new Font("Segoe UI", 8f),
                 Left = stepsStartX, Top = rowY, Width = stepLblW, Height = stepCbSize,
                 AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Visible = false };
-            var cb = new CheckBox { Left = stepsStartX + stepLblW + 4, Top = rowY,
+            var cb = new SmoothCheckBox { Left = stepsStartX + stepLblW + 4, Top = rowY,
                 Width = stepCbSize, Height = stepCbSize, AutoSize = false, Visible = false,
                 CheckAlign = ContentAlignment.MiddleCenter };
             cb.CheckedChanged += (_, _) => pictureBox.Invalidate();
-            var timing = new Label { Text = "", ForeColor = Color.FromArgb(140, 140, 140),
+            var timing = new SmoothLabel { Text = "", ForeColor = Color.FromArgb(140, 140, 140),
                 Font = new Font("Segoe UI", 7.5f),
                 Left = stepsStartX + stepLblW + 4 + stepCbSize + 4, Top = rowY,
                 Width = stepTimingW, Height = stepCbSize,
@@ -214,13 +231,13 @@ partial class MainForm : Form
         Button MakeBtn(string text, int w, Color? bg = null)
         {
             var col = bg ?? Color.FromArgb(58, 58, 58);
-            var b = new Button
+            var b = new SmoothButton
             {
-                Text = text, Top = 97, Width = w, Height = 28,
+                Text = text, Top = 8, Width = w, Height = 28,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.White,
                 BackColor = col,
-                Font = new Font("Segoe UI", 9f),
+                Font = SystemFonts.DefaultFont,
                 Cursor = Cursors.Hand
             };
             b.FlatAppearance.BorderSize = 0;
@@ -234,6 +251,7 @@ partial class MainForm : Form
         panel.Controls.Add(btnOpen);
 
         btnClear = MakeBtn("Clear", 80);
+        btnClear.Enabled = false;
         btnClear.Click += (s, e) => ClearBorders();
         panel.Controls.Add(btnClear);
 
@@ -242,6 +260,7 @@ partial class MainForm : Form
             int idx = i;
             btnBorders[i] = MakeBtn($"Border {i + 1}", 80);
             btnBorders[i].ForeColor = BorderWinColors[i];
+            btnBorders[i].Enabled = false;
             btnBorders[i].Click += (s, e) => SetActiveMode(activeBorderIdx == idx ? -1 : idx);
             panel.Controls.Add(btnBorders[i]);
         }
@@ -261,13 +280,18 @@ partial class MainForm : Form
         btnExtractManual.Click += OnExtractManual;
         panel.Controls.Add(btnExtractManual);
 
+        btnSettings = MakeBtn("⚙", 36);
+        btnSettings.Click += (s, e) => ToggleSettings();
+        panel.Controls.Add(btnSettings);
+
         panel.Resize += (s, e) => RepositionButtons(panel);
         RepositionButtons(panel);
 
+        Controls.Add(slide);
         Controls.Add(panel);
 
         // ── Barre de statut ─────────────────────────────────────────────────
-        labelStatus = new Label
+        labelStatus = new SmoothLabel
         {
             Dock = DockStyle.Bottom,
             Height = 22,
@@ -288,6 +312,7 @@ partial class MainForm : Form
         typeof(Panel).GetProperty("DoubleBuffered",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
             ?.SetValue(tabPanel, true);
+        tabPanel.Resize += (s, e) => RefreshTabPanel();
         Controls.Add(tabPanel);
 
         // ── Drag & drop ──────────────────────────────────────────────────────
@@ -295,9 +320,15 @@ partial class MainForm : Form
         DragEnter += (s, e) => { if (e.Data!.GetDataPresent(DataFormats.FileDrop)) e.Effect = DragDropEffects.Copy; };
         DragDrop  += OnDragDrop;
 
-        FormClosing += (s, e) => SaveConfig();
+        FormClosing += (s, e) => { System.Threading.Interlocked.Increment(ref settingsAnimGen); SaveConfig(); };
         LoadConfig();
         SetActiveMode(0);
+        UpdateDisplay();
+        // Appliquer l'état initial (défaut ou config)
+        settingsSlide.Height = showSettings ? slideH : 0;
+        settingsSlide.Visible = showSettings;
+        RepositionButtons(buttonBar);
+        UpdateDetectorMode();
     }
 
     void UpdateLabel(Label lbl, string name, int val) =>
@@ -319,13 +350,63 @@ partial class MainForm : Form
     void RepositionButtons(Panel panel)
     {
         btnOpen.Left = 10;
-        btnExtractManual.Left = panel.Width - 10 - btnExtractManual.Width;
-        Control[] center = new Control[] { btnClear, btnBorders[0], btnBorders[1], btnBorders[2], btnBorders[3], btnRefine, btnParallel };
-        int[] gaps = new int[] { 18, 6, 6, 6, 18, 6 };
+        btnSettings.Left      = panel.Width - 10 - btnSettings.Width;
+        btnExtractManual.Left = btnSettings.Left - 6 - btnExtractManual.Width;
+
+        Control[] center = { btnClear, btnBorders[0], btnBorders[1], btnBorders[2], btnBorders[3], btnRefine, btnParallel };
+        int[] gaps = { 18, 6, 6, 6, 18, 6 };
         int groupW = center.Sum(b => b.Width) + gaps.Sum();
-        int minGap = gaps[0]; // 18 px — même espace qu'entre Clear et Border 1
-        int startX = btnOpen.Right + Math.Max(minGap, (btnExtractManual.Left - btnOpen.Right - groupW) / 2);
+        int startX = btnOpen.Right + Math.Max(gaps[0], (btnExtractManual.Left - btnOpen.Right - groupW) / 2);
         int cx = startX;
         for (int i = 0; i < center.Length; i++) { center[i].Left = cx; cx += center[i].Width + (i < gaps.Length ? gaps[i] : 0); }
+    }
+
+    void DisableImageButtons()
+    {
+        btnClear.Enabled = false;
+        foreach (var b in btnBorders) b.Enabled = false;
+        btnExtractManual.Enabled = false;
+        btnRefine.Enabled = false;
+        btnParallel.Enabled = false;
+    }
+
+    void ToggleSettings()
+    {
+        showSettings = !showSettings;
+        if (showSettings) settingsSlide.Visible = true;
+
+        int from = settingsSlide.Height;
+        int to   = showSettings ? 94 : 0;
+        settingsAnimT    = 0f;
+        settingsAnimating = true;
+        bool show = showSettings;
+        int gen = System.Threading.Interlocked.Increment(ref settingsAnimGen);
+
+        Task.Run(() =>
+        {
+            while (settingsAnimGen == gen)
+            {
+                DwmFlush();
+                if (settingsAnimGen != gen) break;
+                try
+                {
+                    Invoke(() =>
+                    {
+                        if (settingsAnimGen != gen) return;
+                        settingsAnimT = Math.Min(1f, settingsAnimT + 0.065f);
+                        float ease = settingsAnimT * settingsAnimT * (3f - 2f * settingsAnimT);
+                        settingsSlide.Height = (int)Math.Round(from + (to - from) * ease);
+                        if (settingsAnimT >= 1f)
+                        {
+                            System.Threading.Interlocked.Increment(ref settingsAnimGen);
+                            settingsAnimating = false;
+                            if (!show) settingsSlide.Visible = false;
+                            SaveConfig();
+                        }
+                    });
+                }
+                catch { System.Threading.Interlocked.Increment(ref settingsAnimGen); break; }
+            }
+        });
     }
 }
