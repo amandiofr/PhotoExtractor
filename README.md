@@ -47,7 +47,9 @@ cd PhotoExtractor
 dotnet run
 ```
 
-Open an image with the **Open** button or drag & drop a file onto the window.
+Open an image with the **Open** button or drag & drop one or several files onto the window. Each file opens in its own tab.
+
+When a photo has been extracted, its area is marked **DONE** directly on the page so you always know what has already been processed.
 
 ---
 
