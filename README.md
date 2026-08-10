@@ -34,7 +34,7 @@ It is designed for a specific use case — digitising a physical album page by p
 ## Requirements
 
 - Windows 10/11
-- [.NET 10 Runtime](https://dotnet.microsoft.com/download)
+- [.NET 9 Runtime](https://dotnet.microsoft.com/download)
 - [OpenCvSharp4](https://github.com/shimat/opencvsharp) (restored automatically via NuGet)
 
 ---
