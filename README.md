@@ -31,21 +31,23 @@ It is designed for a specific use case — digitising a physical album page by p
 
 ---
 
-## Requirements
+## Download & Install
 
-- Windows 10/11
-- [.NET 9 Runtime](https://dotnet.microsoft.com/download)
-- [OpenCvSharp4](https://github.com/shimat/opencvsharp) (restored automatically via NuGet)
+1. Go to the [Releases page](https://github.com/amandiofr/PhotoExtractor/releases/latest).
+2. Scroll down to the **Assets** section of the latest release (it's collapsed by default — click the word **Assets** to expand it).
+3. Click on the file named `PhotoExtractor-Setup-X.X.X.exe` to download it (X.X.X is the version number).
+4. Double-click the downloaded file and follow the setup wizard (Next → Next → Install).
+5. When it's done, PhotoExtractor starts automatically. You'll also find it in the Start Menu next time.
+
+That's it — everything the app needs is bundled in the installer, so there's nothing else to download or configure. No administrator rights are required.
+
+> Windows may show a "Windows protected your PC" warning the first time, because the app isn't digitally signed. Click **More info**, then **Run anyway**.
+
+To remove PhotoExtractor later, use **Add or remove programs** in Windows Settings, same as any other app.
 
 ---
 
 ## Getting Started
-
-```
-git clone <repo>
-cd PhotoExtractor
-dotnet run
-```
 
 Open an image with the **Open** button or drag & drop one or several files onto the window. Each file opens in its own tab.
 
@@ -86,3 +88,25 @@ my_album_page_02_Extractored.jpg
 ```
 
 Quality is fixed at JPEG 95.
+
+---
+
+## Building from source (developers)
+
+Requires the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0). [OpenCvSharp4](https://github.com/shimat/opencvsharp) is restored automatically via NuGet.
+
+```
+git clone https://github.com/amandiofr/PhotoExtractor.git
+cd PhotoExtractor
+dotnet run
+```
+
+### Building the installer (maintainers)
+
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`) in addition to the .NET 9 SDK.
+
+```
+.\installer\build-installer.ps1 -Version 1.1.0
+```
+
+This publishes a self-contained build (no separate .NET Runtime needed on the target machine) and packages it into `publish-installer\PhotoExtractor-Setup-<version>.exe`.
