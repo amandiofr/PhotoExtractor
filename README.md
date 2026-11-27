@@ -4,6 +4,13 @@
 
 A Windows desktop tool for digitising old photo albums. Point it at a page captured with a flatbed scanner, a camera, or a smartphone — then extract each photograph individually with perspective correction and full manual control.
 
+<p>
+<img src="screenshots/workspace.png" width="520" alt="An album page: one photo done, the next one framed, turned 90°">
+<img src="screenshots/result.jpg" width="340" alt="The extracted photo, straight and the right way up">
+</p>
+
+*A demo album page made of public-domain photochrom prints (Library of Congress).*
+
 ## Why PhotoExtractor?
 
 Most tools assume photos are straight rectangles. Album photos rarely are: they're glued at an angle, overlapping, shot from the side. Fully automatic tools either miss them or produce distorted crops. Photoshop works but is slow when you have hundreds to process.
