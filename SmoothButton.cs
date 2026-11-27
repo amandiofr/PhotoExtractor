@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Windows.Forms;
 using System.Windows.Forms.VisualStyles;
@@ -7,6 +8,10 @@ using CA = System.Drawing.ContentAlignment;
 class SmoothButton : Button
 {
     bool _hovered, _pressed;
+
+    /// <summary>Rayon des coins, en pixels (réduit automatiquement sur les petits boutons).</summary>
+    [System.ComponentModel.DefaultValue(6f)]
+    public float Radius { get; set; } = 6f;
 
     public SmoothButton()
     {
@@ -27,20 +32,43 @@ class SmoothButton : Button
         Color bg = !Enabled             ? BackColor :
                    _pressed && _hovered ? over(FlatAppearance.MouseDownBackColor) :
                    _hovered             ? over(FlatAppearance.MouseOverBackColor) : BackColor;
-        g.Clear(bg);
+        // Coins arrondis : le fond du parent remplit les coins, puis le bouton
+        // est dessiné en rectangle arrondi lissé.
+        g.Clear(Parent?.BackColor ?? BackColor);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float radius = Math.Min(Radius, Math.Min(Width, Height) / 4f);
 
         int bs = FlatAppearance.BorderSize;
+        using (var fill = new SolidBrush(bg))
+        using (var path = RoundedRect(new RectangleF(0, 0, Width, Height), radius))
+            g.FillPath(fill, path);
         if (bs > 0)
         {
             using var pen = new Pen(FlatAppearance.BorderColor, bs);
-            g.DrawRectangle(pen, bs / 2f, bs / 2f, Width - bs, Height - bs);
+            var r = new RectangleF(bs / 2f, bs / 2f, Width - bs, Height - bs);
+            using var path = RoundedRect(r, Math.Max(0, radius - bs / 2f));
+            g.DrawPath(pen, path);
         }
+        g.SmoothingMode = SmoothingMode.Default;
 
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         Color fg = Enabled ? ForeColor : Color.FromArgb(110, ForeColor.R, ForeColor.G, ForeColor.B);
         using var brush = new SolidBrush(fg);
         var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
         g.DrawString(Text, Font, brush, new RectangleF(0, 0, Width, Height), sf);
+    }
+
+    static GraphicsPath RoundedRect(RectangleF r, float radius)
+    {
+        var path = new GraphicsPath();
+        if (radius <= 0) { path.AddRectangle(r); return path; }
+        float d = radius * 2;
+        path.AddArc(r.Left,      r.Top,        d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Top,        d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d,   0, 90);
+        path.AddArc(r.Left,      r.Bottom - d, d, d,  90, 90);
+        path.CloseFigure();
+        return path;
     }
 }
 
