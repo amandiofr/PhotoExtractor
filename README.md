@@ -47,6 +47,11 @@ Then frame the next photo on the page.
 - The app remembers your open pages, settings and window layout for next time.
 - It works with flatbed scans as well as photos taken with a camera or a phone.
 
+## License
+
+GNU GPL v3: you are free to use, change and share this app, as long as what you share stays free and open,
+under the same license. Full text: [click here](LICENSE).
+
 ## For developers
 
 Building, the installer and how it works: [click here](docs/TECHNICAL.md).
